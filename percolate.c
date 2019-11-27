@@ -9,11 +9,14 @@
 
 int main(int argc, char *argv[]) {
   int size; // number of processes
-  int rank;
+  int rank; // process ID
+
+  /* initialize MPI */
   MPI_Init(&argc, &argv);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+  /* inspect command line arguments */
   if (size != nP*mP+1) {
     printf("Wrong number of processes!\n");
     MPI_Finalize();
@@ -26,6 +29,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  /* master process operations */
   if (rank == 0) {
     printf("Number of processes is %d\n", size);
     int seed = atoi(argv[1]);
@@ -33,6 +37,7 @@ int main(int argc, char *argv[]) {
 
     printf("End of master process\n");
   }
+  /* child processes operations */
   else {
     callRank_i(rank);
 
@@ -45,6 +50,7 @@ int main(int argc, char *argv[]) {
 
 void callRank_0(int seed) {
   int map[L][L], old[M + 2][N + 2];
+
   MPI_Status status;
 
   double rho;
@@ -64,6 +70,7 @@ void callRank_0(int seed) {
 
   nhole = 0;
 
+  /* initialize map without halo, give each square a unique value */
   for (i = 0; i < L; i++) {
     for (j = 0; j < L; j++) {
       r = uni();
@@ -79,6 +86,7 @@ void callRank_0(int seed) {
 
   printf("percolate: rho = %f, actual density = %f\n",rho, 1.0 - ((double)nhole) / ((double)L*L));
 
+  /* copy map to old */
   for (i = 1; i <= M; i++) {
     for (j = 1; j <= N; j++) {
       old[i][j] = map[i - 1][j - 1];
@@ -96,7 +104,10 @@ void callRank_0(int seed) {
     old[M + 1][j] = 0;
   }
 
-  /* assign send a small block to each child process */
+  // start timing
+  start = MPI_Wtime();
+
+  /* assign a small block to each child process */
   for (iD = 1; iD <= nP*mP; iD++) {
     bigMat2vec(old, vec, iD);
     MPI_Send(&vec, (length_m + 2)*(length_n + 2), MPI_INT, iD, 1, MPI_COMM_WORLD);
@@ -107,8 +118,6 @@ void callRank_0(int seed) {
   nchange_global = 1;
   step = 1;
 
-  start = MPI_Wtime();
-
   while (step <= maxstep) {
     nchange = 0;
 
@@ -117,6 +126,10 @@ void callRank_0(int seed) {
       old[M+1][j] = old[1][j];
     }
 
+    /*
+     * using reduction to calculate number of changes
+     * and average of map every 100 steps
+     */
     if (step % printfreq == 0) {
       MPI_Allreduce(&nchange, &nchange_global, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
       printf("master ID = %d: number of changes on step %d is %d\n", 0, step, nchange_global);
@@ -126,29 +139,32 @@ void callRank_0(int seed) {
       MPI_Allreduce(&avg, &avg_global, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
       avg_global /= (1.0*M*N);
-      printf("master avecage of the map array : %f\n", avg_global);
+      printf("master avecage of the map array : %f\n\n", avg_global);
     }
-		
+
+    // termination condition, when changes is 0, break the loop
     if (nchange_global == 0) {
       break;
     }
     step++;
   }
 
+  // receive data from all child processes and then make a big map
   for (iD = 1; iD <= nP*mP; iD++)  {
     MPI_Recv(&vec, (length_m + 2)*(length_n + 2), MPI_INT, iD, 1, MPI_COMM_WORLD, &status);
     vec2BigMat(old, vec, iD);
   }
 
+  // end timing
   finish = MPI_Wtime();
   printf("Elapsed time is : %f s\n", finish - start);
-  //  printf("master 时间精度 : %f s\n", MPI_Wtick());
 
   //	writeBigMat(old);
   if (nchange != 0) {
     printf("percolate: WARNING max steps = %d reached before nchange = 0\n",maxstep);
   }
 
+  // copy old back to map
   for (i = 1; i <= M; i++) {
     for (j = 1; j <= N; j++) {
       map[i - 1][j - 1] = old[i][j];
@@ -157,6 +173,7 @@ void callRank_0(int seed) {
 	
   perc = 0;
 
+  // determine if percolates
   for (itop = 0; itop < L; itop++) {
     if (map[itop][L - 1] > 0) {
       for (ibot = 0; ibot < L; ibot++) {
@@ -174,14 +191,25 @@ void callRank_0(int seed) {
     printf("percolate: cluster DOES NOT percolate\n");
   }
 
+  // write data to "pgm" file
   percwritedynamic("map.pgm", map, L, 3);
 
   return;
 }
 
+/*
+ * This function includes all operations need to
+ * be done by child processes. Including "halo-swapping",
+ * receving and sending data from master process
+ */
 void callRank_i(int rank) {
   MPI_Status status;
 
+  /*
+   * Create two 2D arrays for halo-swapping.
+   * lemgth_m: length of rectangle in m direction
+   * length_n: length of rectangle in n direction
+   */
   int old[length_m + 2][length_n + 2], new[length_m + 2][length_n + 2];
   int i, j, step, oldval, newval, nchange, nchange_global;
   MPI_Request reqs[8];
@@ -202,15 +230,10 @@ void callRank_i(int rank) {
   int r_right_vec[(length_n + 2)];
   int m0, n0, id;
 
-  int tID = rank - 1;//？？？？
-  int mTh = tID % mP;  //  
-  int nTh = tID / mP;
+  int tID = rank - 1;  // child process ID except master
+  int mTh = tID % mP;  // position of process in m direction
+  int nTh = tID / mP;  // position of process in n direction
 
-  int mBegin = mTh*length_m;    // begin coordinate in the m direction
-  int mEnd = mBegin + length_m-1;   // end coordinate in the m direction
-  int nBegin = nTh*length_n;    // begin coordinate in the n direction
-  int nEnd = nTh*length_n + length_n-1;
-  int ithRequest = 0;
   double avg, avg_global;
 
   // receive chunk from master
@@ -226,6 +249,8 @@ void callRank_i(int rank) {
   step = 1;
   nchange = 1;
   nchange_global = 1;
+
+  /* update squares by comparing with its four neighbours */
   while (step <= maxstep) {
     nchange = 0;
 
@@ -378,17 +403,19 @@ void callRank_i(int rank) {
   MPI_Send(&vec, (length_m + 2)*(length_n + 2), MPI_INT, 0, 1, MPI_COMM_WORLD);
 }
 
+/* split big matrix into small vectors */
 void bigMat2vec(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], int rank) {
   int i, j;
   rank = rank - 1;
   int mTh = rank % mP;
   int nTh = rank / mP;
 
-  int mBegin = mTh*length_m;
-  int mEnd = mBegin + length_m + 2;
+  int mBegin = mTh*length_m; // beginning coordinate in m direction
+  int mEnd = mBegin + length_m + 2;  // ending coordinate in m direction
   int nBegin = nTh*length_n;
   int nEnd = nTh*length_n + length_n + 2;
 
+  // copy values from big matrix to rectangle
   int ith = 0;
   for (i = mBegin; i < mEnd; i++) {
     for (j = nBegin; j < nEnd; j++) {
@@ -397,6 +424,8 @@ void bigMat2vec(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], i
     }
   }
 }
+
+/* Combine all small rectangles to a complete matrix(map) after updating */
 void vec2BigMat(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], int rank) {
   int mat2[length_m + 2][length_n + 2];
 
@@ -418,13 +447,15 @@ void vec2BigMat(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], i
     }
   }
 
-  for (i = 1; i < length_m + 1; i++) {
-    for ( j = 1; j < length_n + 1; j++)
+  for (i = 1; i <= length_m; i++) {
+    for ( j = 1; j <= length_n; j++)
       {
 	mat[mBegin + i][nBegin + j] = mat2[i][j];
       }
   }
 }
+// copy old to small rectangles in child processes
+// then send data to master process
 void Mat2vec(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length_n + 2)]) {
   int i, j;
   int ith = 0;
@@ -435,6 +466,8 @@ void Mat2vec(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length
     }
   }
 }
+// copy small rectangles to old after receving data
+// from master process
 void vec2Mat(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length_n + 2)]) {
   int i, j;
   int ith = 0;
@@ -445,6 +478,16 @@ void vec2Mat(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length
     }
   }
 }
+
+/*
+ * these functions deal with halo swapping,
+ * convert new to small rectangles, then interact
+ * with up or down neighbours
+ * 
+ * mat: "new" map (small rectangle)
+ * vec: up side or down side of rectangle
+ * type: 0 is up, 1 is down
+ */
 void Mat2vec_UpDown(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)], int type) {
   int j;
   int ith = 0;
@@ -508,6 +551,7 @@ void vec2Mat_LeftRight(int mat[length_m + 2][length_n + 2], int vec[(length_n + 
 
 }
 
+/* these two function are to print results in middle phase for testing */
 void writeBigMat(int mat[M + 2][N + 2]) {
   int i, j;
   for (j = 0; j < N + 2; j++) {

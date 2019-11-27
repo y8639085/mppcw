@@ -40,14 +40,14 @@ float uni(void);
 #define mP 1 // number of divisions in the m direction
 #define nP 3 // number of divisions in the n direction
 
-#define length_m M/mP //矩形m方向大小
-#define length_n N/nP //矩形n方向大小
+#define length_m M/mP // length in m direction
+#define length_n N/nP // length in n direction
 #define maxstep 20000 // 16 * L;
 #define printfreq 100 // 100;
 
 void callRank_0(int seed);
 void callRank_i(int rank);
-void bigMat2vec(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], int rank);
+void bigMat2vec(int mat[M + 2][N + 2], int vor[(length_m + 2)*(length_n + 2)], int rank);
 void vec2BigMat(int mat[M + 2][N + 2], int vec[(length_m + 2)*(length_n + 2)], int rank);
 void Mat2vec(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length_n + 2)]);
 void vec2Mat(int mat[length_m + 2][length_n + 2], int vec[(length_m + 2)*(length_n + 2)]);

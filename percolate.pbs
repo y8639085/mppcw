@@ -17,8 +17,6 @@
 module load mpt
 module load intel-compilers-18
 
-# Change directory back to where the job was submitted from
-
 cd $PBS_O_WORKDIR
 
 echo 'Started at' `date`
@@ -30,7 +28,7 @@ echo '--------------------------------------------------------------------------
 # "select" option above to ask for more nodes.  For example, for
 # between 37 and 72 processes you would use: #PBS -l select=2:ncpus=36
 
-mpiexec_mpt -ppn 36 -n 5 ./percolate 1564
+mpiexec_mpt -ppn 36 -n 4 ./percolate 1564
 
 echo '--------------------------------------------------------------------------------'
 echo 'Finished at' `date`
